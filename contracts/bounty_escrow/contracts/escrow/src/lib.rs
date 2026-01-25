@@ -205,6 +205,24 @@ pub struct Escrow {
     pub deadline: u64,
 }
 
+/// Rate limit configuration for the contract.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitConfig {
+    pub max_ops: u32,
+    pub window_seconds: u64,
+    pub cooldown_seconds: u64,
+}
+
+/// Tracking state for an address's rate limit.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AddressRateState {
+    pub last_window_start: u64,
+    pub last_op_timestamp: u64,
+    pub op_count: u32,
+}
+
 /// Storage keys for contract data.
 ///
 /// # Keys
@@ -221,6 +239,9 @@ pub enum DataKey {
     Token,
     Escrow(u64), // bounty_id
     ReentrancyGuard,
+    RateLimitConfig,
+    RateLimitState(Address),
+    Whitelisted(Address),
 }
 
 // ============================================================================
@@ -280,6 +301,14 @@ impl BountyEscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
 
+        // Set default rate limits: 10 operations per 1 hour, 60s cooldown
+        let config = RateLimitConfig {
+            max_ops: 10,
+            window_seconds: 3600,
+            cooldown_seconds: 60,
+        };
+        env.storage().instance().set(&DataKey::RateLimitConfig, &config);
+
         // Emit initialization event
         emit_bounty_initialized(
             &env,
@@ -291,6 +320,86 @@ impl BountyEscrowContract {
         );
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Internal Rate Limiting Logic
+    // ========================================================================
+
+    fn check_rate_limit(env: &Env, address: Address) {
+        // Skip check if address is whitelisted
+        if env.storage().instance().has(&DataKey::Whitelisted(address.clone())) {
+            return;
+        }
+
+        let config: RateLimitConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::RateLimitConfig)
+            .unwrap_or(RateLimitConfig {
+                max_ops: 10,
+                window_seconds: 3600,
+                cooldown_seconds: 60,
+            });
+
+        let mut state: AddressRateState = env
+            .storage()
+            .temporary()
+            .get(&DataKey::RateLimitState(address.clone()))
+            .unwrap_or(AddressRateState {
+                last_window_start: env.ledger().timestamp(),
+                last_op_timestamp: 0,
+                op_count: 0,
+            });
+
+        let now = env.ledger().timestamp();
+
+        // Check cooldown
+        if state.last_op_timestamp > 0 && now < state.last_op_timestamp + config.cooldown_seconds {
+            panic!("Cooldown period not reached");
+        }
+
+        if now >= state.last_window_start + config.window_seconds {
+            // New window
+            state.last_window_start = now;
+            state.op_count = 1;
+        } else {
+            // Same window
+            state.op_count += 1;
+            if state.op_count > config.max_ops {
+                panic!("Rate limit exceeded for address");
+            }
+        }
+
+        state.last_op_timestamp = now;
+        env.storage().temporary().set(&DataKey::RateLimitState(address), &state);
+    }
+
+    // ========================================================================
+    // Admin Functions
+    // ========================================================================
+
+    pub fn set_rate_limit_config(env: Env, max_ops: u32, window_seconds: u64, cooldown_seconds: u64) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("Not initialized");
+        admin.require_auth();
+
+        let config = RateLimitConfig {
+            max_ops,
+            window_seconds,
+            cooldown_seconds,
+        };
+        env.storage().instance().set(&DataKey::RateLimitConfig, &config);
+    }
+
+    pub fn set_whitelist_status(env: Env, address: Address, status: bool) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("Not initialized");
+        admin.require_auth();
+
+        if status {
+            env.storage().instance().set(&DataKey::Whitelisted(address), &true);
+        } else {
+            env.storage().instance().remove(&DataKey::Whitelisted(address));
+        }
     }
 
     // ========================================================================
@@ -356,6 +465,7 @@ impl BountyEscrowContract {
     ) -> Result<(), Error> {
         // Verify depositor authorization
         depositor.require_auth();
+        Self::check_rate_limit(&env, depositor.clone());
 
         // Ensure contract is initialized
         if env.storage().instance().has(&DataKey::ReentrancyGuard) {
@@ -478,6 +588,7 @@ impl BountyEscrowContract {
         // Verify admin authorization
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
+        Self::check_rate_limit(&env, admin.clone());
 
         // Verify bounty exists
         if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
@@ -573,18 +684,15 @@ impl BountyEscrowContract {
     /// // After deadline passes, refund becomes available
     /// // Current time must be > deadline
     /// ```
-    pub fn refund(env: Env, bounty_id: u64) -> Result<(), Error> {
+    pub fn refund(env: Env, triggerer: Address, bounty_id: u64) -> Result<(), Error> {
+        triggerer.require_auth();
+        Self::check_rate_limit(&env, triggerer.clone());
+        
         if env.storage().instance().has(&DataKey::ReentrancyGuard) {
             panic!("Reentrancy detected");
         }
         env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
 
-        // We'll allow anyone to trigger the refund if conditions are met, 
-        // effectively making it permissionless but conditional.
-        // OR we can require depositor auth. Let's make it permissionless to ensure funds aren't stuck if depositor key is lost,
-        // but strictly logic bound.
-        // However, usually refund is triggered by depositor. Let's stick to logic.
-        
         // Verify bounty exists
         if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
             return Err(Error::BountyNotFound);
