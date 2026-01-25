@@ -246,26 +246,24 @@ fn test_batch_payout_success() {
     ];
     let amounts = vec![&env, 10_000_000_000, 20_000_000_000, 15_000_000_000];
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        let program_data = contract.batch_payout(&env, recipients, amounts);
+    env.mock_all_auths();
+    let program_data = contract.batch_payout(&env, recipients, amounts);
 
-        assert_eq!(program_data.remaining_balance, 55_000_000_000); // 100 - 10 - 20 - 15
-        assert_eq!(program_data.payout_history.len(), 3);
+    assert_eq!(program_data.remaining_balance, 55_000_000_000); // 100 - 10 - 20 - 15
+    assert_eq!(program_data.payout_history.len(), 3);
 
-        // Verify payout records
-        let payout1 = program_data.payout_history.get(0).unwrap();
-        assert_eq!(payout1.recipient, recipient1);
-        assert_eq!(payout1.amount, 10_000_000_000);
+    // Verify payout records
+    let payout1 = program_data.payout_history.get(0).unwrap();
+    assert_eq!(payout1.recipient, recipient1);
+    assert_eq!(payout1.amount, 10_000_000_000);
 
-        let payout2 = program_data.payout_history.get(1).unwrap();
-        assert_eq!(payout2.recipient, recipient2);
-        assert_eq!(payout2.amount, 20_000_000_000);
+    let payout2 = program_data.payout_history.get(1).unwrap();
+    assert_eq!(payout2.recipient, recipient2);
+    assert_eq!(payout2.amount, 20_000_000_000);
 
-        let payout3 = program_data.payout_history.get(2).unwrap();
-        assert_eq!(payout3.recipient, recipient3);
-        assert_eq!(payout3.amount, 15_000_000_000);
-    });
+    let payout3 = program_data.payout_history.get(2).unwrap();
+    assert_eq!(payout3.recipient, recipient3);
+    assert_eq!(payout3.amount, 15_000_000_000);
 }
 
 #[test]
@@ -280,21 +278,20 @@ fn test_batch_payout_event_emission() {
     let amounts = vec![&env, 25_000_000_000, 30_000_000_000];
     let total_payout = 55_000_000_000;
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        contract.batch_payout(&env, recipients, amounts);
+    env.mock_all_auths();
+    contract.batch_payout(&env, recipients, amounts);
 
-        let events = env.events().all();
-        assert_eq!(events.len(), 3); // init + lock + batch_payout
+    let events = env.events().all();
+    // init (1) + lock (1) + batch_payout (1) = 3
+    assert_eq!(events.len(), 3); 
 
-        let batch_event = &events[2];
-        assert_eq!(batch_event.0, (BATCH_PAYOUT,));
-        let event_data: (String, u32, i128, i128) = batch_event.1.clone();
-        assert_eq!(event_data.0, program_id);
-        assert_eq!(event_data.1, 2u32); // number of recipients
-        assert_eq!(event_data.2, total_payout);
-        assert_eq!(event_data.3, 45_000_000_000); // remaining balance: 100 - 55
-    });
+    let batch_event = &events[2];
+    assert_eq!(batch_event.0, (BATCH_PAYOUT,));
+    let event_data: (String, u32, i128, i128) = batch_event.1.clone();
+    assert_eq!(event_data.0, program_id);
+    assert_eq!(event_data.1, 2u32); // number of recipients
+    assert_eq!(event_data.2, total_payout);
+    assert_eq!(event_data.3, 45_000_000_000); // remaining balance: 100 - 55
 }
 
 #[test]
@@ -306,17 +303,15 @@ fn test_batch_payout_single_recipient() {
     let recipients = vec![&env, recipient.clone()];
     let amounts = vec![&env, 25_000_000_000];
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        let program_data = contract.batch_payout(&env, recipients, amounts);
+    env.mock_all_auths();
+    let program_data = contract.batch_payout(&env, recipients, amounts);
 
-        assert_eq!(program_data.remaining_balance, 25_000_000_000);
-        assert_eq!(program_data.payout_history.len(), 1);
+    assert_eq!(program_data.remaining_balance, 25_000_000_000);
+    assert_eq!(program_data.payout_history.len(), 1);
 
-        let payout = program_data.payout_history.get(0).unwrap();
-        assert_eq!(payout.recipient, recipient);
-        assert_eq!(payout.amount, 25_000_000_000);
-    });
+    let payout = program_data.payout_history.get(0).unwrap();
+    assert_eq!(payout.recipient, recipient);
+    assert_eq!(payout.amount, 25_000_000_000);
 }
 
 #[test]
@@ -342,12 +337,10 @@ fn test_batch_payout_multiple_batches() {
     let recipients2 = vec![&env, recipient2, recipient3];
     let amounts2 = vec![&env, 40_000_000_000, 50_000_000_000];
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        let program_data = contract.batch_payout(&env, recipients2, amounts2);
-        assert_eq!(program_data.remaining_balance, 80_000_000_000);
-        assert_eq!(program_data.payout_history.len(), 3);
-    });
+    env.mock_all_auths();
+    let program_data = contract.batch_payout(&env, recipients2, amounts2);
+    assert_eq!(program_data.remaining_balance, 80_000_000_000);
+    assert_eq!(program_data.payout_history.len(), 3);
 }
 
 #[test]
@@ -361,10 +354,8 @@ fn test_batch_payout_unauthorized() {
     let recipients = vec![&env, recipient];
     let amounts = vec![&env, 10_000_000_000];
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&unauthorized);
-        contract.batch_payout(&env, recipients, amounts); // Should panic
-    });
+    env.mock_all_auths();
+    contract.batch_payout(&env, recipients, amounts); // Should panic
 }
 
 #[test]
@@ -491,18 +482,16 @@ fn test_single_payout_success() {
     let recipient = Address::generate(&env);
     let payout_amount = 10_000_000_000;
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        let program_data = contract.single_payout(&env, recipient.clone(), payout_amount);
+    env.mock_all_auths();
+    let program_data = contract.single_payout(&env, recipient.clone(), payout_amount);
 
-        assert_eq!(program_data.remaining_balance, 40_000_000_000);
-        assert_eq!(program_data.payout_history.len(), 1);
+    assert_eq!(program_data.remaining_balance, 40_000_000_000);
+    assert_eq!(program_data.payout_history.len(), 1);
 
-        let payout = program_data.payout_history.get(0).unwrap();
-        assert_eq!(payout.recipient, recipient);
-        assert_eq!(payout.amount, payout_amount);
-        assert!(payout.timestamp > 0);
-    });
+    let payout = program_data.payout_history.get(0).unwrap();
+    assert_eq!(payout.recipient, recipient);
+    assert_eq!(payout.amount, payout_amount);
+    assert!(payout.timestamp > 0);
 }
 
 #[test]
@@ -513,21 +502,19 @@ fn test_single_payout_event_emission() {
     let recipient = Address::generate(&env);
     let payout_amount = 15_000_000_000;
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        contract.single_payout(&env, recipient.clone(), payout_amount);
+    env.mock_all_auths();
+    contract.single_payout(&env, recipient.clone(), payout_amount);
 
-        let events = env.events().all();
-        assert_eq!(events.len(), 3); // init + lock + payout
+    let events = env.events().all();
+    assert_eq!(events.len(), 3); // init + lock + payout
 
-        let payout_event = &events[2];
-        assert_eq!(payout_event.0, (PAYOUT,));
-        let event_data: (String, Address, i128, i128) = payout_event.1.clone();
-        assert_eq!(event_data.0, program_id);
-        assert_eq!(event_data.1, recipient);
-        assert_eq!(event_data.2, payout_amount);
-        assert_eq!(event_data.3, 35_000_000_000); // remaining balance: 50 - 15
-    });
+    let payout_event = &events[2];
+    assert_eq!(payout_event.0, (PAYOUT,));
+    let event_data: (String, Address, i128, i128) = payout_event.1.clone();
+    assert_eq!(event_data.0, program_id);
+    assert_eq!(event_data.1, recipient);
+    assert_eq!(event_data.2, payout_amount);
+    assert_eq!(event_data.3, 35_000_000_000); // remaining balance: 50 - 15
 }
 
 #[test]
@@ -587,10 +574,8 @@ fn test_single_payout_unauthorized() {
     let unauthorized = Address::generate(&env);
     let recipient = Address::generate(&env);
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&unauthorized);
-        contract.single_payout(&env, recipient, 10_000_000_000); // Should panic
-    });
+    env.mock_all_auths();
+    contract.single_payout(&env, recipient, 10_000_000_000); // Should panic
 }
 
 #[test]
@@ -601,10 +586,8 @@ fn test_single_payout_insufficient_balance() {
 
     let recipient = Address::generate(&env);
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        contract.single_payout(&env, recipient, 30_000_000_000); // Should panic
-    });
+    env.mock_all_auths();
+    contract.single_payout(&env, recipient, 30_000_000_000); // Should panic
 }
 
 #[test]
@@ -615,10 +598,8 @@ fn test_single_payout_zero_amount() {
 
     let recipient = Address::generate(&env);
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        contract.single_payout(&env, recipient, 0); // Should panic
-    });
+    env.mock_all_auths();
+    contract.single_payout(&env, recipient, 0); // Should panic
 }
 
 #[test]
@@ -629,10 +610,8 @@ fn test_single_payout_negative_amount() {
 
     let recipient = Address::generate(&env);
 
-    env.as_contract(&contract, || {
-        env.set_invoker(&admin);
-        contract.single_payout(&env, recipient, -10_000_000_000); // Should panic
-    });
+    env.mock_all_auths();
+    contract.single_payout(&env, recipient, -10_000_000_000); // Should panic
 }
 
 #[test]
@@ -738,6 +717,98 @@ fn test_get_remaining_balance_before_init() {
     let contract = ProgramEscrowContract;
 
     contract.get_remaining_balance(&env);
+}
+
+// =============================================================================
+// TESTS FOR RATE LIMITING
+// =============================================================================
+
+#[test]
+fn test_rate_limit_enforcement() {
+    let env = Env::default();
+    let (contract, admin, _, _) = setup_program_with_funds(&env, 100_000_000_000);
+    
+    // Default limit: 20 ops per hour, 30s cooldown
+    env.mock_all_auths();
+    
+    let recipient = Address::generate(&env);
+    
+    // First operation
+    contract.single_payout(&env, recipient.clone(), 1_000);
+    
+    // Second operation immediately - should panic with cooldown
+    let result = std::panic::catch_unwind(|| {
+        contract.single_payout(&env, recipient.clone(), 1_000);
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_cooldown_period() {
+    let env = Env::default();
+    let (contract, admin, _, _) = setup_program_with_funds(&env, 100_000_000_000);
+    
+    env.mock_all_auths();
+    let recipient = Address::generate(&env);
+    
+    // First operation at T=0
+    contract.single_payout(&env, recipient.clone(), 1_000);
+    
+    // Move time forward by 31 seconds (cooldown is 30s)
+    env.ledger().set_timestamp(31);
+    
+    // Second operation - should succeed
+    contract.single_payout(&env, recipient.clone(), 1_000);
+}
+
+#[test]
+fn test_whitelist_bypass() {
+    let env = Env::default();
+    let (contract, admin, _, _) = setup_program_with_funds(&env, 100_000_000_000);
+    
+    env.mock_all_auths();
+    
+    // Whitelist the admin
+    contract.set_whitelist_status(&env, admin.clone(), true);
+    
+    let recipient = Address::generate(&env);
+    
+    // First operation
+    contract.single_payout(&env, recipient.clone(), 1_000);
+    
+    // Second operation immediately - should succeed because whitelisted
+    contract.single_payout(&env, recipient.clone(), 1_000);
+}
+
+#[test]
+fn test_limit_configuration_updates() {
+    let env = Env::default();
+    let (contract, admin, _, _) = setup_program_with_funds(&env, 100_000_000_000);
+    
+    env.mock_all_auths();
+    
+    // Set tight limits: 2 ops window, 5s cooldown
+    contract.set_rate_limit_config(&env, 3600, 2, 5);
+    
+    let recipient = Address::generate(&env);
+    
+    // Op 1 (T=0)
+    contract.single_payout(&env, recipient.clone(), 1_000);
+    
+    // Move past cooldown (T=6)
+    env.ledger().set_timestamp(6);
+    
+    // Op 2 (T=6)
+    contract.single_payout(&env, recipient.clone(), 1_000);
+    
+    // Move past cooldown (T=12)
+    env.ledger().set_timestamp(12);
+    
+    // Op 3 - should fail because max_ops=2
+    let result = std::panic::catch_unwind(|| {
+        contract.single_payout(&env, recipient.clone(), 1_000);
+    });
+    assert!(result.is_err());
 }
 
 // =============================================================================

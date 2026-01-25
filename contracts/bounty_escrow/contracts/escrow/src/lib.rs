@@ -12,6 +12,8 @@ pub enum Error {
     FundsNotLocked = 5,
     DeadlineNotPassed = 6,
     Unauthorized = 7,
+    RateLimitExceeded = 8,
+    CooldownActive = 9,
 }
 
 #[contracttype]
@@ -32,10 +34,29 @@ pub struct Escrow {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitConfig {
+    pub window_seconds: u64,
+    pub max_ops_per_window: u32,
+    pub cooldown_seconds: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserStats {
+    pub last_operation_time: u64,
+    pub window_start_time: u64,
+    pub op_count: u32,
+}
+
+#[contracttype]
 pub enum DataKey {
     Admin,
     Token,
     Escrow(u64), // bounty_id
+    RateLimitCfg,
+    UserStats(Address),
+    Whitelist(Address),
 }
 
 #[contract]
@@ -50,6 +71,98 @@ impl BountyEscrowContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
+
+        // Default rate limit: 10 ops per hour, 60s cooldown
+        let default_config = RateLimitConfig {
+            window_seconds: 3600,
+            max_ops_per_window: 10,
+            cooldown_seconds: 60,
+        };
+        env.storage().instance().set(&DataKey::RateLimitCfg, &default_config);
+
+        Ok(())
+    }
+
+    /// Set rate limit configuration. Only Admin.
+    pub fn set_rate_limit_config(
+        env: Env,
+        window_seconds: u64,
+        max_ops_per_window: u32,
+        cooldown_seconds: u64,
+    ) -> Result<(), Error> {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        let config = RateLimitConfig {
+            window_seconds,
+            max_ops_per_window,
+            cooldown_seconds,
+        };
+        env.storage().instance().set(&DataKey::RateLimitCfg, &config);
+        Ok(())
+    }
+
+    /// Set whitelist status for an address. Only Admin.
+    pub fn set_whitelist_status(env: Env, address: Address, whitelisted: bool) -> Result<(), Error> {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        if whitelisted {
+            env.storage().instance().set(&DataKey::Whitelist(address), &true);
+        } else {
+            env.storage().instance().remove(&DataKey::Whitelist(address));
+        }
+        Ok(())
+    }
+
+    fn check_rate_limit(env: &Env, user: &Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::Whitelist(user.clone())) {
+            return Ok(());
+        }
+
+        let config: RateLimitConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::RateLimitCfg)
+            .unwrap(); // Should exist after init
+
+        let now = env.ledger().timestamp();
+        let mut stats: UserStats = env
+            .storage()
+            .temporary()
+            .get(&DataKey::UserStats(user.clone()))
+            .unwrap_or(UserStats {
+                last_operation_time: 0,
+                window_start_time: now,
+                op_count: 0,
+            });
+
+        // 1. Check cooldown
+        if stats.last_operation_time > 0 && now < stats.last_operation_time + config.cooldown_seconds {
+            env.events().publish((Symbol::new(&env, "rate_limit_violation"), user.clone()), (Symbol::new(&env, "cooldown"), now));
+            return Err(Error::CooldownActive);
+        }
+
+        // 2. Check window
+        if now >= stats.window_start_time + config.window_seconds {
+            // New window
+            stats.window_start_time = now;
+            stats.op_count = 1;
+        } else {
+            // Same window
+            if stats.op_count >= config.max_ops_per_window {
+                env.events().publish((Symbol::new(&env, "rate_limit_violation"), user.clone()), (Symbol::new(&env, "max_ops"), now));
+                return Err(Error::RateLimitExceeded);
+            }
+            stats.op_count += 1;
+        }
+
+        stats.last_operation_time = now;
+        env.storage().temporary().set(&DataKey::UserStats(user.clone()), &stats);
+        
+        // Extend TTL for stats
+        env.storage().temporary().extend_ttl(&DataKey::UserStats(user.clone()), 17280, 17280); // ~1 day
+
         Ok(())
     }
 
@@ -62,6 +175,7 @@ impl BountyEscrowContract {
         deadline: u64,
     ) -> Result<(), Error> {
         depositor.require_auth();
+        Self::check_rate_limit(&env, &depositor)?;
 
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
@@ -191,3 +305,7 @@ impl BountyEscrowContract {
         Ok(client.balance(&env.current_contract_address()))
     }
 }
+
+#[cfg(test)]
+mod test;
+
